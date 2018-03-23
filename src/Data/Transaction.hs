@@ -87,8 +87,8 @@ transToList $ do
 :}
 [4,5,6]
 -}
-action :: a -> Transaction a
-action a = tranVal a ()
+action :: Monoid m => a -> TransactionM a m
+action a = tranVal a mempty
 
 {- ==============
  -   Converters
