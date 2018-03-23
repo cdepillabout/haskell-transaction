@@ -96,7 +96,7 @@ transToList $ do
 :}
 [4,6,7,7]
 -}
-tMap :: (a -> b) -> TransactionM a () -> TransactionM b ()
+tMap :: (a -> b) -> TransactionM a x -> TransactionM b x
 tMap = first
 
 {- |
@@ -110,7 +110,7 @@ transToList $ do
 :}
 [4,6,7]
 -}
-tFilter :: (a -> Bool) -> TransactionM a () -> TransactionM a ()
+tFilter :: (a -> Bool) -> TransactionM a x -> TransactionM a x
 tFilter p = tFilterMap $ \a -> if p a then Just a else Nothing
 
 {- |
