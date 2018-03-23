@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -31,13 +32,21 @@ module Data.Transaction
   , TransactionM(..)
   ) where
 
+import Prelude hiding (filter)
+
 import Control.Monad.Free
 import Data.Bifoldable
 import Data.Bifunctor
+import Data.Witherable
 
 {- ==============
  -     Types
  - ============== -}
+
+newtype Flip f b a = Flip { unFlip :: f a b }
+
+flipped :: (Flip f b a -> Flip g d c) -> f a b -> g c d
+flipped f = unFlip . f . Flip
 
 newtype Tuple a b = Tuple (a,b) deriving (Bifunctor, Functor)
 
@@ -50,8 +59,11 @@ newtype TransactionM a x = TransactionM
 
 type Transaction a = TransactionM a ()
 
+freeTupVal :: a -> x -> Free (Tuple a) x
+freeTupVal a x = Free (Tuple (a, pure x))
+
 tranVal :: a -> x -> TransactionM a x
-tranVal a x = TransactionM $ Free (Tuple (a, pure x))
+tranVal a x = TransactionM $ freeTupVal a x
 
 instance Bifunctor TransactionM where
   first :: forall a b x. (a -> b) -> TransactionM a x -> TransactionM b x
@@ -64,6 +76,18 @@ instance Bifoldable TransactionM where
   bifoldMap
     :: forall m a x. Monoid m => (a -> m) -> (x -> m) -> TransactionM a x -> m
   bifoldMap f g = iter (combineTuple (<>)) . unTransM . bimap f g
+
+instance Functor (Flip TransactionM x) where
+  fmap :: (a -> b) -> Flip TransactionM x a -> Flip TransactionM x b
+  fmap f (Flip trans) = Flip $ first f trans
+
+instance Filterable (Flip TransactionM a) where
+  catMaybes :: forall x. Flip TransactionM a (Maybe x) -> Flip TransactionM a x
+  catMaybes (Flip (TransactionM free)) = Flip $ TransactionM $ foldFree go free
+    where
+      go :: Tuple (Maybe x) z -> Free (Tuple x) z
+      go (Tuple (Nothing, z)) = pure z
+      go (Tuple (Just x, z)) = freeTupVal x z
 
 {- ==============
  -   Operators
@@ -111,7 +135,7 @@ transToList $ do
 [4,6,7]
 -}
 tFilter :: (a -> Bool) -> TransactionM a x -> TransactionM a x
-tFilter p = tFilterMap $ \a -> if p a then Just a else Nothing
+tFilter p = flipped (filter p)
 
 {- |
 >>> :{
@@ -125,10 +149,7 @@ transToList $ do
 [4,7,7]
 -}
 tFilterMap :: forall a b x. (a -> Maybe b) -> TransactionM a x -> TransactionM b x
-tFilterMap f (TransactionM free) = TransactionM $ foldFree go free
-  where
-    go :: forall z. Tuple a z -> Free (Tuple b) z
-    go (Tuple (a, z)) = maybe (pure z) (\b -> Free (Tuple (b, pure z))) $ f a
+tFilterMap f = flipped (mapMaybe f)
 
 reduce :: forall b a x. (b -> a -> b) -> b -> TransactionM a x -> b
 reduce f b = bifoldl' f const b
