@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -20,23 +21,26 @@ module Data.Transaction
 
   -- * Converters
   , reduce
-  , toList
+  , transToList
   , tMap
   , tFilter
   , tFilterMap
 
   -- * Types
   , Transaction
-  , TransactionM
+  , TransactionM(..)
   ) where
 
 import Control.Monad.Free
+import Data.Bifoldable
+import Data.Bifunctor
+import Data.Foldable
 
 {- ==============
  -     Types
  - ============== -}
 
-newtype Tuple a b = Tuple (a,b) deriving Functor
+newtype Tuple a b = Tuple (a,b) deriving (Bifunctor, Functor)
 
 newtype TransactionM a x = TransactionM
   { unTransactionM :: Free (Tuple a) x
@@ -47,13 +51,36 @@ type Transaction a = TransactionM a ()
 tranVal :: a -> x -> TransactionM a x
 tranVal a x = TransactionM $ Free (Tuple (a, pure x))
 
+instance Bifunctor TransactionM where
+  first :: forall a b x. (a -> b) -> TransactionM a x -> TransactionM b x
+  first f (TransactionM free) = TransactionM $ go free
+    where
+      go :: Free (Tuple a) x -> Free (Tuple b) x
+      go (Free (Tuple (a, next))) = Free (Tuple (f a, go next))
+      go (Pure x) = Pure x
+
+  second = fmap
+
+instance Bifoldable TransactionM where
+  bifoldMap ::
+       forall m a x. Monoid m
+    => (a -> m)
+    -> (x -> m)
+    -> TransactionM a x
+    -> m
+  bifoldMap f g (TransactionM free) = go free
+    where
+      go :: Free (Tuple a) x -> m
+      go (Free (Tuple (a, next))) = f a <> go next
+      go (Pure x) = g x
+
 {- ==============
  -   Operators
  - ============== -}
 
 {- |
 >>> :{
-toList $ do
+transToList $ do
   action 4
   action 5
   action 6
@@ -69,7 +96,7 @@ action a = tranVal a ()
 
 {- |
 >>> :{
-toList $ do
+transToList $ do
   action 4
   tMap (+1) $ do
     action 5
@@ -78,12 +105,12 @@ toList $ do
 :}
 [4,6,7,7]
 -}
-tMap :: (a -> b) -> Transaction a -> Transaction b
-tMap f = tFilterMap (pure . f)
+tMap :: (a -> b) -> TransactionM a () -> TransactionM b ()
+tMap = first
 
 {- |
 >>> :{
-toList $ do
+transToList $ do
   action 4
   tFilter even $ do
     action 5
@@ -92,7 +119,7 @@ toList $ do
 :}
 [4,6,7]
 -}
-tFilter :: (a -> Bool) -> Transaction a -> Transaction a
+tFilter :: (a -> Bool) -> TransactionM a () -> TransactionM a ()
 tFilter p = tFilterMap $ \a ->
   if p a
     then Just a
@@ -100,7 +127,7 @@ tFilter p = tFilterMap $ \a ->
 
 {- |
 >>> :{
-toList $ do
+transToList $ do
   action 4
   tFilterMap (\x -> if even x then Just (x + 1) else Nothing) $ do
     action 5
@@ -109,7 +136,7 @@ toList $ do
 :}
 [4,7,7]
 -}
-tFilterMap :: forall a b. (a -> Maybe b) -> Transaction a -> Transaction b
+tFilterMap :: forall a b. (a -> Maybe b) -> TransactionM a () -> TransactionM b ()
 tFilterMap f (TransactionM free) = TransactionM $ go free
   where
     go :: Free (Tuple a) () -> Free (Tuple b) ()
@@ -119,14 +146,8 @@ tFilterMap f (TransactionM free) = TransactionM $ go free
         Nothing -> go next
     go (Pure x) = Pure x
 
-reduce :: forall b a . (b -> a -> b) -> b -> Transaction a -> b
-reduce f b (TransactionM free) = go b free
-  where
-    go :: b -> (Free (Tuple a) ()) -> b
-    go b (Free (Tuple (a, next))) = go (f b a) next
-    go b (Pure x) = b
--- reduce f b (TVal a next) = undefined -- reduce f (f b a) next
--- reduce _ b (TNull ()) = undefined -- b
+reduce :: forall b a . (b -> a -> b) -> b -> TransactionM a () -> b
+reduce f b = bifoldl' f const b
 
-toList :: Transaction a -> [a]
-toList trans = reduce (\f a -> f . (a:)) id trans []
+transToList :: TransactionM a () -> [a]
+transToList = bifoldMap pure (const [])
