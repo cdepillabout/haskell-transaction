@@ -127,10 +127,10 @@ transToList $ do
 :}
 [4,7,7]
 -}
-tFilterMap :: forall a b. (a -> Maybe b) -> TransactionM a () -> TransactionM b ()
+tFilterMap :: forall a b. (a -> Maybe b) -> TransactionM a x -> TransactionM b x
 tFilterMap f (TransactionM free) = TransactionM $ go free
   where
-    go :: Free (Tuple a) () -> Free (Tuple b) ()
+    go :: Free (Tuple a) x -> Free (Tuple b) x
     go (Free (Tuple (a, next))) =
       case f a of
         Just b -> Free (Tuple (b, go next))
