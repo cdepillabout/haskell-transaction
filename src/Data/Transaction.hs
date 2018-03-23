@@ -34,7 +34,6 @@ module Data.Transaction
 import Control.Monad.Free
 import Data.Bifoldable
 import Data.Bifunctor
-import Data.Foldable
 
 {- ==============
  -     Types
@@ -42,8 +41,11 @@ import Data.Foldable
 
 newtype Tuple a b = Tuple (a,b) deriving (Bifunctor, Functor)
 
+combineTuple :: (a -> b -> c) -> Tuple a b -> c
+combineTuple f (Tuple (a, b)) = f a b
+
 newtype TransactionM a x = TransactionM
-  { unTransactionM :: Free (Tuple a) x
+  { unTransM :: Free (Tuple a) x
   } deriving (Functor, Applicative, Monad)
 
 type Transaction a = TransactionM a ()
@@ -53,26 +55,15 @@ tranVal a x = TransactionM $ Free (Tuple (a, pure x))
 
 instance Bifunctor TransactionM where
   first :: forall a b x. (a -> b) -> TransactionM a x -> TransactionM b x
-  first f (TransactionM free) = TransactionM $ go free
-    where
-      go :: Free (Tuple a) x -> Free (Tuple b) x
-      go (Free (Tuple (a, next))) = Free (Tuple (f a, go next))
-      go (Pure x) = Pure x
+  first f (TransactionM free) = TransactionM $ hoistFree (first f) free
 
+  second :: forall a x y. (x -> y) -> TransactionM a x -> TransactionM a y
   second = fmap
 
 instance Bifoldable TransactionM where
-  bifoldMap ::
-       forall m a x. Monoid m
-    => (a -> m)
-    -> (x -> m)
-    -> TransactionM a x
-    -> m
-  bifoldMap f g (TransactionM free) = go free
-    where
-      go :: Free (Tuple a) x -> m
-      go (Free (Tuple (a, next))) = f a <> go next
-      go (Pure x) = g x
+  bifoldMap
+    :: forall m a x. Monoid m => (a -> m) -> (x -> m) -> TransactionM a x -> m
+  bifoldMap f g = iter (combineTuple (<>)) . unTransM . bimap f g
 
 {- ==============
  -   Operators
@@ -87,8 +78,8 @@ transToList $ do
 :}
 [4,5,6]
 -}
-action :: Monoid m => a -> TransactionM a m
-action a = tranVal a mempty
+action :: a -> TransactionM a ()
+action a = tranVal a ()
 
 {- ==============
  -   Converters
@@ -146,8 +137,8 @@ tFilterMap f (TransactionM free) = TransactionM $ go free
         Nothing -> go next
     go (Pure x) = Pure x
 
-reduce :: forall b a . (b -> a -> b) -> b -> TransactionM a () -> b
+reduce :: forall b a x. (b -> a -> b) -> b -> TransactionM a x -> b
 reduce f b = bifoldl' f const b
 
-transToList :: TransactionM a () -> [a]
+transToList :: TransactionM a x -> [a]
 transToList = bifoldMap pure (const [])
