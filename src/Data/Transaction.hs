@@ -111,10 +111,7 @@ transToList $ do
 [4,6,7]
 -}
 tFilter :: (a -> Bool) -> TransactionM a () -> TransactionM a ()
-tFilter p = tFilterMap $ \a ->
-  if p a
-    then Just a
-    else Nothing
+tFilter p = tFilterMap $ \a -> if p a then Just a else Nothing
 
 {- |
 >>> :{
@@ -127,15 +124,11 @@ transToList $ do
 :}
 [4,7,7]
 -}
-tFilterMap :: forall a b. (a -> Maybe b) -> TransactionM a x -> TransactionM b x
-tFilterMap f (TransactionM free) = TransactionM $ go free
+tFilterMap :: forall a b x. (a -> Maybe b) -> TransactionM a x -> TransactionM b x
+tFilterMap f (TransactionM free) = TransactionM $ foldFree go free
   where
-    go :: Free (Tuple a) x -> Free (Tuple b) x
-    go (Free (Tuple (a, next))) =
-      case f a of
-        Just b -> Free (Tuple (b, go next))
-        Nothing -> go next
-    go (Pure x) = Pure x
+    go :: forall z. Tuple a z -> Free (Tuple b) z
+    go (Tuple (a, z)) = maybe (pure z) (\b -> Free (Tuple (b, pure z))) $ f a
 
 reduce :: forall b a x. (b -> a -> b) -> b -> TransactionM a x -> b
 reduce f b = bifoldl' f const b
