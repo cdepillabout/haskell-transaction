@@ -1,4 +1,6 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 {- |
 Module      :  Data.Transaction
@@ -28,26 +30,22 @@ module Data.Transaction
   , TransactionM
   ) where
 
+import Control.Monad.Free
+
 {- ==============
  -     Types
  - ============== -}
 
-data TransactionM a x
-  = TVal a (TransactionM a x)
-  | TNull x
-  deriving (Functor)
+newtype Tuple a b = Tuple (a,b) deriving Functor
+
+newtype TransactionM a x = TransactionM
+  { unTransactionM :: Free (Tuple a) x
+  } deriving (Functor, Applicative, Monad)
 
 type Transaction a = TransactionM a ()
 
-instance Applicative (TransactionM a) where
-  pure = TNull
-  TVal a next <*> f = TVal a (next <*> f)
-  TNull g <*> f = f >>= (pure . g)
-
-instance Monad (TransactionM a) where
-  return = pure
-  TVal a next >>= f = TVal a (next >>= f)
-  TNull a >>= f = f a
+tranVal :: a -> x -> TransactionM a x
+tranVal a x = TransactionM $ Free (Tuple (a, pure x))
 
 {- ==============
  -   Operators
@@ -63,7 +61,7 @@ toList $ do
 [4,5,6]
 -}
 action :: a -> Transaction a
-action a = TVal a $ pure ()
+action a = tranVal a ()
 
 {- ==============
  -   Converters
@@ -111,18 +109,24 @@ toList $ do
 :}
 [4,7,7]
 -}
-tFilterMap :: (a -> Maybe b) -> Transaction a -> Transaction b
-tFilterMap f (TVal a next) =
-  case f a of
-    Just b ->
-      TVal b $ tFilterMap f next
-    Nothing ->
-      tFilterMap f next
-tFilterMap _ (TNull ()) = TNull ()
+tFilterMap :: forall a b. (a -> Maybe b) -> Transaction a -> Transaction b
+tFilterMap f (TransactionM free) = TransactionM $ go free
+  where
+    go :: Free (Tuple a) () -> Free (Tuple b) ()
+    go (Free (Tuple (a, next))) =
+      case f a of
+        Just b -> Free (Tuple (b, go next))
+        Nothing -> go next
+    go (Pure x) = Pure x
 
-reduce :: (b -> a -> b) -> b -> Transaction a -> b
-reduce f b (TVal a next) = reduce f (f b a) next
-reduce _ b (TNull ()) = b
+reduce :: forall b a . (b -> a -> b) -> b -> Transaction a -> b
+reduce f b (TransactionM free) = go b free
+  where
+    go :: b -> (Free (Tuple a) ()) -> b
+    go b (Free (Tuple (a, next))) = go (f b a) next
+    go b (Pure x) = b
+-- reduce f b (TVal a next) = undefined -- reduce f (f b a) next
+-- reduce _ b (TNull ()) = undefined -- b
 
 toList :: Transaction a -> [a]
 toList trans = reduce (\f a -> f . (a:)) id trans []
